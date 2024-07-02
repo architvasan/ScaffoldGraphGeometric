@@ -28,7 +28,48 @@ from argparse import ArgumentParser, SUPPRESS
 import selfies
 
 class Custom_Dataset(Dataset):
-        def __init__(self, tokenizer, inpdata, max_length, batch, device="cuda"):
+    def __init__(self, tokenizer, inpdata, max_length, device="cuda"):
+        self.tokenizer = tokenizer
+        self.device = device
+        self.max_length = max_length
+        self.data = inpdata
+
+        # Tokenize the entire dataset during initialization
+        self.inputs = self.tokenizer(
+            self.data,
+            max_length=self.max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt"
+        )
+
+        # Transfer to device
+        self.inputs["input_ids"] = self.inputs["input_ids"].to(self.device)
+        self.inputs["attention_mask"] = self.inputs["attention_mask"].to(self.device)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return {
+            "input_ids": self.inputs["input_ids"][idx],
+            "attention_mask": self.inputs["attention_mask"][idx],
+            "labels": self.inputs["input_ids"][idx]  # Assuming labels are same as input_ids
+        }
+
+def collate_fn(batch):
+    input_ids = torch.stack([item['input_ids'] for item in batch])
+    attention_mask = torch.stack([item['attention_mask'] for item in batch])
+    labels = torch.stack([item['labels'] for item in batch])
+    
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": labels
+    }
+
+class _Custom_Dataset(Dataset):
+        def __init__(self, tokenizer, inpdata, max_length, batch, device="cuda:0"):
             self.tokenizer = tokenizer
             self.device = device
             self.max_length = max_length
@@ -44,7 +85,7 @@ class Custom_Dataset(Dataset):
 
             # tokenize data
             inputs = self.tokenizer(data, max_length=self.max_length, padding="max_length", truncation=True, return_tensors="pt")
-            labels = self.tokenizer(labels, max_length=self.max_length, padding="max_length", truncation=True, return_tensors="pt")
+            #labels = self.tokenizer(labels, max_length=self.max_length, padding="max_length", truncation=True, return_tensors="pt")
 
             return {
                 "input_ids": inputs["input_ids"].flatten().to(self.device),
@@ -53,7 +94,7 @@ class Custom_Dataset(Dataset):
             }
 
 def dataloader(customdata, batch):
-    return torch.utils.data.DataLoader(customdata, batch_size=batch, shuffle=False)
+    return torch.utils.data.DataLoader(customdata, batch_size=batch, shuffle=False, collate_fn=collate_fn)
 
 def encode_nodes(dataloader, LLModel):
     node_data_encoded = []
@@ -62,11 +103,14 @@ def encode_nodes(dataloader, LLModel):
         attention_mask = batch["attention_mask"]
         labels = batch["labels"]
         with torch.no_grad():
-            outputs = LLModel(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True, labels=labels) 
-            encoder = outputs["encoder_last_hidden_state"][-1]
+            outputs = LLModel(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True, labels=labels)
+            encoder = outputs["encoder_last_hidden_state"]
             encoder = encoder.mean(dim=1).detach().cpu().numpy()
-        node_data_encoded.append([encoder])
-    return torch.tensor(np.array(node_data_encoded))
+            #print(encoder.shape)
+        for n in encoder:
+            node_data_encoded.append(n)
+    print(node_data_encoded)
+    return torch.tensor((node_data_encoded))
 
 def ScaffoldGraphStructure(inp_smi_file, tokenizer, LLModel, batch):
     network = sg.ScaffoldNetwork.from_smiles_file(inp_smi_file, progress=True)
@@ -84,7 +128,8 @@ def ScaffoldGraphStructure(inp_smi_file, tokenizer, LLModel, batch):
 
     edge_tensor = torch.tensor(np.array(edges_indices), dtype=torch.long)
 
-    ScaffGraphData = Custom_Dataset(tokenizer, nodes, max_length, batch, device="cuda")
+    ScaffGraphData = Custom_Dataset(tokenizer, nodes, max_length, device="cuda")
+
     scaffdataload = dataloader(ScaffGraphData, batch)#ScaffGraphOps.dataload()
     encoded_nodes = encode_nodes(scaffdataload, LLModel)
     print(encoded_nodes)
@@ -104,14 +149,16 @@ args = parser.parse_args()
 #LLModel = AutoModelForSeq2SeqLM.from_pretrained("GT4SD/multitask-text-and-chemistry-t5-base-augm")
 tokenizer = AutoTokenizer.from_pretrained("zjunlp/MolGen-large")
 LLModel = AutoModelForSeq2SeqLM.from_pretrained("zjunlp/MolGen-large")
+print(LLModel)
 
 LLModel.to("cuda")
 LLModel.eval()
 
 #inp_smi_file = '3CLPro_test.smi'
 max_length = 512
-batch = 1
+batch = 64
 
 ScaffGraphStruct = ScaffoldGraphStructure(args.smifile, tokenizer, LLModel, batch)
 print(ScaffGraphStruct)
+
 
