@@ -109,7 +109,7 @@ def encode_nodes(dataloader, LLModel):
             #print(encoder.shape)
         for n in encoder:
             node_data_encoded.append(n)
-    print(node_data_encoded)
+    #print(node_data_encoded)
     return torch.tensor((node_data_encoded))
 
 def ScaffoldGraphStructure(inp_smi_file, tokenizer, LLModel, batch):
@@ -132,33 +132,84 @@ def ScaffoldGraphStructure(inp_smi_file, tokenizer, LLModel, batch):
 
     scaffdataload = dataloader(ScaffGraphData, batch)#ScaffGraphOps.dataload()
     encoded_nodes = encode_nodes(scaffdataload, LLModel)
+    #print(encoded_nodes)
+    graph_structure = torch_geometric.data.Data(x=encoded_nodes, edge_index=edge_tensor.t().contiguous())
+    print(graph_structure)
+    return graph_structure
+
+def ScaffoldGraphStructure_pandas(smi_df, tokenizer, LLModel, batch):
+
+    # construct a scaffold tree from a pandas dataframe
+    network = sg.ScaffoldNetwork.from_dataframe(
+        smi_df, smiles_column='smiles',#, name_column='name',
+        progress=True,
+    )
+    #network = sg.ScaffoldNetwork.from_smiles_file(inp_smi_file, progress=True), name_column='name'
+    print(dir(network))
+    nodes = list(network.nodes())#molecule_in_graph())#nodes())
+    nodes_raw = np.array(nodes)
+    #print(nodes_raw)
+    nodes = [s.replace("MolNode-", "") for s in nodes]
+    print(nodes)
+    nodes = [selfies.encoder(smi) for smi in nodes]
+    edges_raw = list(network.edges())
+    edges_indices = []
+    for edge in tqdm(edges_raw):
+        it_0 = np.where(nodes_raw==edge[0])
+        it_1 = np.where(nodes_raw==edge[1])
+        edges_indices.append([list(list(it_0)[0])[0], list(list(it_1)[0])[0]])
+
+    edge_tensor = torch.tensor(np.array(edges_indices), dtype=torch.long)
+
+    ScaffGraphData = Custom_Dataset(tokenizer, nodes, max_length, device="cuda")
+
+    scaffdataload = dataloader(ScaffGraphData, batch)#ScaffGraphOps.dataload()
+    encoded_nodes = encode_nodes(scaffdataload, LLModel)
     print(encoded_nodes)
     graph_structure = torch_geometric.data.Data(x=encoded_nodes, edge_index=edge_tensor.t().contiguous())
     return graph_structure
 
 
-################################################################################
-################################################################################
-parser = ArgumentParser()#add_help=False)
-parser.add_argument(
-    "-s", "--smifile", type=str, required=True, help="Input data for training"
-)
-args = parser.parse_args()
+if __name__ == "__main__":
+    ################################################################################
+    ################################################################################
+    parser = ArgumentParser()#add_help=False)
+    parser.add_argument(
+        "-s", "--smifile", type=str, required=True, help="Input data for training"
+    )
+    args = parser.parse_args()
+    
+    #tokenizer = AutoTokenizer.from_pretrained("GT4SD/multitask-text-and-chemistry-t5-base-augm")
+    #LLModel = AutoModelForSeq2SeqLM.from_pretrained("GT4SD/multitask-text-and-chemistry-t5-base-augm")
+    tokenizer = AutoTokenizer.from_pretrained("zjunlp/MolGen-large")
+    LLModel = AutoModelForSeq2SeqLM.from_pretrained("zjunlp/MolGen-large")
+    #print(LLModel)
+    LLModel.to("cuda")
+    LLModel.eval()
+    
+    #inp_smi_file = '3CLPro_test.smi'
+    max_length = 512
+    scaff_init_size = 100
+    batch = 64
+    #smiles_list_new = sample_dataset(data_pwd, dataset, size, rank, sample_size)
+    #smiles_list_new =     
+    #ScaffGraphStruct = ScaffoldGraphStructure(args.smifile, tokenizer, LLModel, batch)
+    #print(ScaffGraphStruct)
 
-#tokenizer = AutoTokenizer.from_pretrained("GT4SD/multitask-text-and-chemistry-t5-base-augm")
-#LLModel = AutoModelForSeq2SeqLM.from_pretrained("GT4SD/multitask-text-and-chemistry-t5-base-augm")
-tokenizer = AutoTokenizer.from_pretrained("zjunlp/MolGen-large")
-LLModel = AutoModelForSeq2SeqLM.from_pretrained("zjunlp/MolGen-large")
-print(LLModel)
-
-LLModel.to("cuda")
-LLModel.eval()
-
-#inp_smi_file = '3CLPro_test.smi'
-max_length = 512
-batch = 64
-
-ScaffGraphStruct = ScaffoldGraphStructure(args.smifile, tokenizer, LLModel, batch)
-print(ScaffGraphStruct)
-
-
+    # Define the chunk size
+    chunk_size = 100  # Number of rows per chunk
+    smidf = pd.read_csv(args.smifile, sep=',')#, chunksize=chunk_size)
+    print(smidf)
+    #df = pd.read_csv(args.smifile, sep='\t', names=['smiles', 'name'])#, chunksize=chunk_size)
+    #print(df)
+    #df.to_csv('data/uc4-2M_csv.smi', index=False)
+    # Iterate through the CSV file in chunks
+    for it in range(1600):#, chunk in tqdm(enumerate(pd.read_csv(args.smifile, sep=',', chunksize=chunk_size))):
+        # Process each chunk
+        chunk = smidf.sample(chunk_size) 
+        chunk['smiles'].to_csv(f'data/chunk{it}.smi', index=False)
+        #print(chunk)
+        chunk_graph_struct = ScaffoldGraphStructure(f'data/chunk{it}.smi', tokenizer, LLModel, batch) #ScaffoldGraphStructure(chunk, tokenizer, LLModel, batch)
+        torch.save(chunk_graph_struct, f'tgeomdata/{it}.torch')
+        #print(chunk.head())  # Example: print the first few rows of the chunk
+        os.remove(f'data/chunk{it}.smi')
