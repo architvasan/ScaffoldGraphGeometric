@@ -29,7 +29,7 @@ import os
 from torch.utils.data import Dataset
 from argparse import ArgumentParser, SUPPRESS
 import selfies
-
+from graphtransf_encoder import *
 if False:
     model = GraphTransformer(
         dim = 256,
@@ -105,13 +105,13 @@ def collate_fn(batch):
 model = GraphTransformer(
     dim = 1024,
     depth = 6,
-    edge_dim = 1,
+    edge_dim = 909,
     with_feedforwards = True,
     gated_residual = True,
     rel_pos_emb = True,
     accept_adjacency_matrix = True  # set this to True
 )
-model.to("cuda")
+#model.to("cuda")
 model.eval()
 
 data = torch.load('tgeomdata/0.torch')
